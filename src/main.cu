@@ -635,7 +635,7 @@ int main(int argc, char *argv[]) {
     int host_suffix_len = 0;
 
     int num_devices = 0;
-    int device_ids[10];
+    int device_ids[32];
 
     for (int i = 1; i < argc;) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {

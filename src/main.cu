@@ -76,6 +76,44 @@ __device__ int score_zero_bytes(Address a) {
     return n;
 }
 
+__device__ int count_letters(uint32_t x) {
+    int n = 0;
+    for (int i = 0; i < 8; i++) {
+        uint8_t nibble = (x >> (i * 4)) & 0xF;
+        n += (nibble >= 0xa && nibble <= 0xf);  // a-f
+    }
+    return n;
+}
+
+__device__ int score_letters(Address a) {
+    int n = 0;
+    n += count_letters(a.a);
+    n += count_letters(a.b);
+    n += count_letters(a.c);
+    n += count_letters(a.d);
+    n += count_letters(a.e);
+    return n;
+}
+
+__device__ int count_numbers(uint32_t x) {
+    int n = 0;
+    for (int i = 0; i < 8; i++) {
+        uint8_t nibble = (x >> (i * 4)) & 0xF;
+        n += (nibble <= 0x9);  // 0-9
+    }
+    return n;
+}
+
+__device__ int score_numbers(Address a) {
+    int n = 0;
+    n += count_numbers(a.a);
+    n += count_numbers(a.b);
+    n += count_numbers(a.c);
+    n += count_numbers(a.d);
+    n += count_numbers(a.e);
+    return n;
+}
+
 __device__ int score_leading_zeros(Address a) {
     uint32_t parts[5] = {a.a, a.b, a.c, a.d, a.e};
     int start_nibble = device_prefix_len;  // Skip prefix if present
@@ -170,6 +208,8 @@ __device__ void handle_output(int score_method, Address a, uint64_t key, bool in
     if (score_method == 0) { score = score_leading_zeros(a); }
     else if (score_method == 1) { score = score_zero_bytes(a); }
     else if (score_method == 2) { score = score_leading_char(a); }
+    else if (score_method == 3) { score = score_letters(a); }
+    else if (score_method == 4) { score = score_numbers(a); }
     score += score_prefix_match(a);
     score += score_suffix_match(a);
 
@@ -191,6 +231,8 @@ __device__ void handle_output2(int score_method, Address a, uint64_t key) {
     if (score_method == 0) { score = score_leading_zeros(a); }
     else if (score_method == 1) { score = score_zero_bytes(a); }
     else if (score_method == 2) { score = score_leading_char(a); }
+    else if (score_method == 3) { score = score_letters(a); }
+    else if (score_method == 4) { score = score_numbers(a); }
     score += score_prefix_match(a);
     score += score_suffix_match(a);
 
@@ -606,7 +648,9 @@ void print_help() {
     printf("Scoring Methods (optional if using --prefix or --suffix):\n");
     printf("  -lz, --leading-zeros          Count leading zero nibbles (scores after prefix if used)\n");
     printf("  -lc, --leading-char <char>    Count leading specific character (scores after prefix if used)\n");
-    printf("  -z,  --zeros                  Count zero bytes anywhere in the address\n\n");
+    printf("  -z,  --zeros                  Count zero bytes anywhere in the address\n");
+    printf("  -l,  --letters                Count letter characters (a-f) anywhere in the address\n");
+    printf("  -n,  --numbers                Count number characters (0-9) anywhere in the address\n\n");
     printf("Modes (optional - default is normal wallet addresses):\n");
     printf("  -c,  --contract               Search for contract addresses (nonce=0)\n");
     printf("  -c2, --contract2              Search for CREATE2 contract addresses\n");
@@ -633,10 +677,15 @@ void print_help() {
     printf("  ./vanity -p cafe -lz -d 0                      # Find 0xcafe0000... (zeros after prefix)\n");
     printf("  ./vanity -p dead -lc 1 -d 0                    # Find 0xdead1111... (1s after prefix)\n");
     printf("  ./vanity -lz -s beef -d 0 -d 1                 # Leading zeros + suffix on 2 GPUs\n");
-    printf("  ./vanity -z -d 0 -d 1 -d 2 -w 17               # Multi-GPU with custom work scale\n\n");
+    printf("  ./vanity -z -d 0 -d 1 -d 2 -w 17               # Multi-GPU with custom work scale\n");
+    printf("  ./vanity -l -d 0                               # Find addresses with most letters (a-f)\n");
+    printf("  ./vanity -n -d 0                               # Find addresses with most numbers (0-9)\n\n");
     printf("Scoring:\n");
     printf("  - Leading zeros: 1 point per hex character (nibble, counted after prefix if used)\n");
     printf("  - Leading char:  1 point per matching character (counted after prefix if used)\n");
+    printf("  - Zero bytes:    1 point per zero byte anywhere in address\n");
+    printf("  - Letters:       1 point per letter character (a-f) anywhere in address\n");
+    printf("  - Numbers:       1 point per number character (0-9) anywhere in address\n");
     printf("  - Prefix match:  3 points per matching character (stops at first mismatch)\n");
     printf("  - Suffix match:  3 points per matching character (stops at first mismatch)\n");
     printf("  - Scores are cumulative: -p cafe -lz scores prefix + zeros after it\n");
@@ -677,26 +726,40 @@ int main(int argc, char *argv[]) {
             i += 2;
         } else if (strcmp(argv[i], "--leading-zeros") == 0 || strcmp(argv[i], "-lz") == 0) {
             if (score_method != -1) {
-                printf("Error: Cannot use multiple scoring methods (-lz, -z, -lc) together\n");
+                printf("Error: Cannot use multiple scoring methods (-lz, -z, -lc, -l, -n) together\n");
                 return 1;
             }
             score_method = 0;
             i++;
         } else if (strcmp(argv[i], "--zeros") == 0 || strcmp(argv[i], "-z") == 0) {
             if (score_method != -1) {
-                printf("Error: Cannot use multiple scoring methods (-lz, -z, -lc) together\n");
+                printf("Error: Cannot use multiple scoring methods (-lz, -z, -lc, -l, -n) together\n");
                 return 1;
             }
             score_method = 1;
             i++;
         } else if (strcmp(argv[i], "--leading-char") == 0 || strcmp(argv[i], "-lc") == 0) {
             if (score_method != -1) {
-                printf("Error: Cannot use multiple scoring methods (-lz, -z, -lc) together\n");
+                printf("Error: Cannot use multiple scoring methods (-lz, -z, -lc, -l, -n) together\n");
                 return 1;
             }
             score_method = 2;
             input_leading_char = argv[i + 1];
             i += 2;
+        } else if (strcmp(argv[i], "--letters") == 0 || strcmp(argv[i], "-l") == 0) {
+            if (score_method != -1) {
+                printf("Error: Cannot use multiple scoring methods (-lz, -z, -lc, -l, -n) together\n");
+                return 1;
+            }
+            score_method = 3;
+            i++;
+        } else if (strcmp(argv[i], "--numbers") == 0 || strcmp(argv[i], "-n") == 0) {
+            if (score_method != -1) {
+                printf("Error: Cannot use multiple scoring methods (-lz, -z, -lc, -l, -n) together\n");
+                return 1;
+            }
+            score_method = 4;
+            i++;
         } else if (strcmp(argv[i], "--contract") == 0 || strcmp(argv[i], "-c") == 0) {
             mode = 1;
             i++;
@@ -737,7 +800,7 @@ int main(int argc, char *argv[]) {
     // Scoring method is optional if prefix or suffix is provided
     if (score_method == -1 && !input_prefix && !input_suffix) {
         printf("No scoring method or pattern was specified\n");
-        printf("You must use one of: --leading-zeros, --leading-char, --zeros, --prefix, or --suffix\n");
+        printf("You must use one of: --leading-zeros, --leading-char, --zeros, --letters, --numbers, --prefix, or --suffix\n");
         return 1;
     }
 
@@ -1050,6 +1113,8 @@ int main(int argc, char *argv[]) {
         char c = (host_leading_char_target < 10) ? ('0' + host_leading_char_target) : ('a' + host_leading_char_target - 10);
         printf("Leading Character '%c'", c);
     }
+    else if (score_method == 3) printf("Letters (a-f)");
+    else if (score_method == 4) printf("Numbers (0-9)");
     else printf("None");
 
     // Add pattern bonuses

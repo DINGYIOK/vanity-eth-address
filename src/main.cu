@@ -788,7 +788,7 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
-        printf("Searching for addresses with leading character: %c\n", c);
+        // Will be shown in summary below
     }
 
     // Parse prefix if provided
@@ -823,7 +823,7 @@ int main(int argc, char *argv[]) {
             }
             host_prefix[i] = nibble;
         }
-        printf("Searching for addresses starting with: %s (score bonus: %d)\n", input_prefix, host_prefix_len * 3);
+        // Will be shown in summary below
     }
 
     // Parse suffix if provided
@@ -858,7 +858,7 @@ int main(int argc, char *argv[]) {
             }
             host_suffix[i] = nibble;
         }
-        printf("Searching for addresses ending with: %s (score bonus: %d)\n", input_suffix, host_suffix_len * 3);
+        // Will be shown in summary below
     }
 
     // Validate scoring method and prefix/suffix combinations
@@ -1030,6 +1030,54 @@ int main(int argc, char *argv[]) {
         cudaMemcpyToSymbol(device_suffix_len, &host_suffix_len, sizeof(int));
         cudaMemcpyToSymbol(device_leading_char_target, &host_leading_char_target, sizeof(uint32_t));
     }
+
+    // Print formatted summary
+    printf("\n");
+    printf("Starting vanity address generation on %d GPU%s\n", num_devices, num_devices == 1 ? "" : "s");
+
+    // Type
+    printf("  Type:     ");
+    if (mode == 0) printf("Address\n");
+    else if (mode == 1) printf("Contract (nonce=0)\n");
+    else if (mode == 2) printf("CREATE2\n");
+    else if (mode == 3) printf("CREATE3\n");
+
+    // Scoring method
+    printf("  Scoring:  ");
+    if (score_method == 0) printf("Leading Zeros");
+    else if (score_method == 1) printf("Zero Bytes");
+    else if (score_method == 2) {
+        char c = (host_leading_char_target < 10) ? ('0' + host_leading_char_target) : ('a' + host_leading_char_target - 10);
+        printf("Leading Character '%c'", c);
+    }
+    else printf("None");
+
+    // Add pattern bonuses
+    bool has_pattern = false;
+    if (input_prefix && host_prefix_len > 0) {
+        if (!has_pattern) printf(" + Patterns");
+        has_pattern = true;
+    }
+    if (input_suffix && host_suffix_len > 0) {
+        if (!has_pattern) printf(" + Patterns");
+        has_pattern = true;
+    }
+    printf("\n");
+
+    // Patterns
+    if (has_pattern) {
+        printf("  Patterns: ");
+        if (input_prefix && host_prefix_len > 0) {
+            printf("Prefix: 0x%s (bonus: %d)", input_prefix, host_prefix_len * 3);
+        }
+        if (input_suffix && host_suffix_len > 0) {
+            if (input_prefix && host_prefix_len > 0) printf(" & ");
+            printf("Suffix: %s (bonus: %d)", input_suffix, host_suffix_len * 3);
+        }
+        printf("\n");
+    }
+
+    printf("\n");
 
     std::vector<std::thread> threads;
     uint64_t global_start_time = milliseconds();

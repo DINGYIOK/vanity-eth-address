@@ -77,41 +77,42 @@ __device__ int score_zero_bytes(Address a) {
 }
 
 __device__ int score_leading_zeros(Address a) {
-    int n = __clz(a.a);
-    if (n == 32) {
-        n += __clz(a.b);
+    uint32_t parts[5] = {a.a, a.b, a.c, a.d, a.e};
+    int start_nibble = device_prefix_len;  // Skip prefix if present
 
-        if (n == 64) {
-            n += __clz(a.c);
+    int count = 0;
+    for (int i = start_nibble; i < 40; i++) {
+        int part_idx = i / 8;           // which uint32_t (0=a, 1=b, etc.)
+        int nibble_idx = 7 - (i % 8);   // which nibble within uint32_t (high to low)
 
-            if (n == 96) {
-                n += __clz(a.d);
-
-                if (n == 128) {
-                    n += __clz(a.e);
-                }
-            }
+        uint8_t nibble = (parts[part_idx] >> (nibble_idx * 4)) & 0xF;
+        if (nibble == 0) {
+            count++;
+        } else {
+            break;  // stop at first non-zero
         }
     }
-
-    return n >> 2;  // divide by 4 to count nibbles (hex chars) instead of bytes
+    return count;
 }
 
 __device__ int score_leading_char(Address a) {
     const uint32_t target = device_leading_char_target;
-    int n = 0;
-    #define scan(begin, word) \
-        for (int i = begin; i < (begin + 8) && i == n; i++) { \
-            n += ((word & 0xF0000000) == (target << 28)); \
-            word <<= 4; \
+    uint32_t parts[5] = {a.a, a.b, a.c, a.d, a.e};
+    int start_nibble = device_prefix_len;  // Skip prefix if present
+
+    int count = 0;
+    for (int i = start_nibble; i < 40; i++) {
+        int part_idx = i / 8;           // which uint32_t (0=a, 1=b, etc.)
+        int nibble_idx = 7 - (i % 8);   // which nibble within uint32_t (high to low)
+
+        uint8_t nibble = (parts[part_idx] >> (nibble_idx * 4)) & 0xF;
+        if (nibble == target) {
+            count++;
+        } else {
+            break;  // stop at first mismatch
         }
-    scan(0, a.a)
-    scan(8, a.b)
-    scan(16, a.c)
-    scan(24, a.d)
-    scan(32, a.e)
-    #undef scan
-    return n;
+    }
+    return count;
 }
 
 __device__ int score_prefix_match(Address a) {
@@ -603,8 +604,8 @@ void print_help() {
     printf("Vanity Eth Address - Generate Ethereum addresses matching specific patterns\n\n");
     printf("Usage: ./vanity [OPTIONS]\n\n");
     printf("Scoring Methods (optional if using --prefix or --suffix):\n");
-    printf("  -lz, --leading-zeros          Count leading zero nibbles (hex chars) in the address\n");
-    printf("  -lc, --leading-char <char>    Count leading occurrences of a specific hex character (0-9, a-f)\n");
+    printf("  -lz, --leading-zeros          Count leading zero nibbles (scores after prefix if used)\n");
+    printf("  -lc, --leading-char <char>    Count leading specific character (scores after prefix if used)\n");
     printf("  -z,  --zeros                  Count zero bytes anywhere in the address\n\n");
     printf("Modes (optional - default is normal wallet addresses):\n");
     printf("  -c,  --contract               Search for contract addresses (nonce=0)\n");
@@ -624,19 +625,21 @@ void print_help() {
     printf("Other:\n");
     printf("  -h,  --help                   Show this help message\n\n");
     printf("Examples:\n");
-    printf("  ./vanity -lz -d 0                              # Find addresses with leading zeros on GPU 0\n");
+    printf("  ./vanity -lz -d 0                              # Find addresses with leading zeros\n");
     printf("  ./vanity -lc 1 -d 0                            # Find addresses with leading 1s\n");
-    printf("  ./vanity -p cafe -d 0                          # Find addresses starting with 'cafe' (pattern only)\n");
-    printf("  ./vanity -s beef -d 0                          # Find addresses ending with 'beef' (pattern only)\n");
-    printf("  ./vanity -p dead -s beef -d 0                  # Find addresses with both prefix and suffix\n");
+    printf("  ./vanity -p cafe -d 0                          # Find addresses starting with 'cafe'\n");
+    printf("  ./vanity -s beef -d 0                          # Find addresses ending with 'beef'\n");
+    printf("  ./vanity -p dead -s beef -d 0                  # Find 0xdead...beef addresses\n");
+    printf("  ./vanity -p cafe -lz -d 0                      # Find 0xcafe0000... (zeros after prefix)\n");
+    printf("  ./vanity -p dead -lc 1 -d 0                    # Find 0xdead1111... (1s after prefix)\n");
     printf("  ./vanity -lz -s beef -d 0 -d 1                 # Leading zeros + suffix on 2 GPUs\n");
-    printf("  ./vanity -lz -p dead -s 1337 -c -d 0           # Contract addresses with prefix and suffix\n");
     printf("  ./vanity -z -d 0 -d 1 -d 2 -w 17               # Multi-GPU with custom work scale\n\n");
     printf("Scoring:\n");
-    printf("  - Leading zeros: 1 point per hex character (nibble)\n");
-    printf("  - Leading char:  1 point per matching leading character\n");
+    printf("  - Leading zeros: 1 point per hex character (nibble, counted after prefix if used)\n");
+    printf("  - Leading char:  1 point per matching character (counted after prefix if used)\n");
     printf("  - Prefix match:  3 points per matching character (stops at first mismatch)\n");
     printf("  - Suffix match:  3 points per matching character (stops at first mismatch)\n");
+    printf("  - Scores are cumulative: -p cafe -lz scores prefix + zeros after it\n");
     printf("  - Max 10 results printed per score level\n\n");
 }
 
@@ -860,22 +863,7 @@ int main(int argc, char *argv[]) {
 
     // Validate scoring method and prefix/suffix combinations
     if (input_prefix && host_prefix_len > 0) {
-        // Check for impossible combinations: leading zeros with non-zero prefix
-        if (score_method == 0 && host_prefix[0] != 0) {
-            printf("Error: Cannot use --leading-zeros with a prefix that doesn't start with '0'\n");
-            printf("       Addresses cannot both have leading zeros and start with '%s'\n", input_prefix);
-            return 1;
-        }
-
-        // Check for impossible combinations: leading char with different prefix start
-        if (score_method == 2 && host_prefix[0] != host_leading_char_target) {
-            char target_char = (host_leading_char_target < 10) ? ('0' + host_leading_char_target) : ('a' + host_leading_char_target - 10);
-            printf("Error: Cannot use --leading-char %c with a prefix that starts with '%c'\n", target_char, input_prefix[0]);
-            printf("       Addresses cannot both have leading '%c's and start with '%s'\n", target_char, input_prefix);
-            return 1;
-        }
-
-        // Check for non-useful combinations: prefix is strictly better for leading patterns
+        // Check for non-useful combinations: prefix already includes the pattern
         if (score_method == 0) {
             // Check if prefix starts with zeros
             bool all_zeros = true;
@@ -886,10 +874,11 @@ int main(int argc, char *argv[]) {
                 }
             }
             if (all_zeros) {
-                printf("Warning: Using --leading-zeros with prefix '%s' is inefficient\n", input_prefix);
-                printf("         The prefix already scores leading zeros at 3x weight vs 1x for --leading-zeros\n");
-                printf("         Consider using just --prefix %s without --leading-zeros\n", input_prefix);
-                printf("\nContinue anyway? This combination will work but scores suboptimally. (y/n): ");
+                printf("Warning: Using --leading-zeros with all-zero prefix '%s' is inefficient\n", input_prefix);
+                printf("         The prefix already scores these zeros at 3x weight (%d pts)\n", host_prefix_len * 3);
+                printf("         Additional zeros after the prefix score at 1x weight\n");
+                printf("         Consider using just --prefix %s if you don't need extra zeros\n", input_prefix);
+                printf("\nContinue anyway? (y/n): ");
                 char response;
                 if (scanf(" %c", &response) != 1 || (response != 'y' && response != 'Y')) {
                     return 1;
@@ -908,10 +897,11 @@ int main(int argc, char *argv[]) {
             }
             if (all_same) {
                 char target_char = (host_leading_char_target < 10) ? ('0' + host_leading_char_target) : ('a' + host_leading_char_target - 10);
-                printf("Warning: Using --leading-char %c with prefix '%s' is inefficient\n", target_char, input_prefix);
-                printf("         The prefix already scores these characters at 3x weight vs 1x for --leading-char\n");
-                printf("         Consider using just --prefix %s without --leading-char\n", input_prefix);
-                printf("\nContinue anyway? This combination will work but scores suboptimally. (y/n): ");
+                printf("Warning: Using --leading-char %c with all-%c prefix '%s' is inefficient\n", target_char, target_char, input_prefix);
+                printf("         The prefix already scores these characters at 3x weight (%d pts)\n", host_prefix_len * 3);
+                printf("         Additional '%c's after the prefix score at 1x weight\n", target_char);
+                printf("         Consider using just --prefix %s if you don't need extra '%c's\n", input_prefix, target_char);
+                printf("\nContinue anyway? (y/n): ");
                 char response;
                 if (scanf(" %c", &response) != 1 || (response != 'y' && response != 'Y')) {
                     return 1;

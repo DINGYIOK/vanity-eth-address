@@ -28,6 +28,8 @@ Examples:
     ./vanity-eth-address --prefix cafe --device 0
     ./vanity-eth-address --suffix beef --device 0
     ./vanity-eth-address --prefix dead --suffix beef --device 0
+    ./vanity-eth-address --prefix cafe --leading-zeros --device 0       # Find 0xcafe0000... (zeros after prefix)
+    ./vanity-eth-address --prefix dead --leading-char 1 --device 0      # Find 0xdead1111... (1s after prefix)
     ./vanity-eth-address --leading-char 1 --device 0
     ./vanity-eth-address --leading-zeros --suffix beef --device 0 --device 1
     ./vanity-eth-address --leading-zeros --prefix dead --suffix 1337 --contract --device 0

@@ -1,6 +1,9 @@
 name: CUDA Windows Build
 
-on: [push, pull_request]
+on: 
+  push:
+    branches:
+      - main  # 指定推送到的目标分支
 
 jobs:
   build:

@@ -1,60 +1,36 @@
-name: "Build"
+name: CUDA Windows Build
 
-on:
-  push:
-    tags:
-      - "*"
+on: [push, pull_request]
 
 jobs:
-  x86_64_windows:
-    name: "x86_64 Windows"
-    runs-on: [windows-2022]
-    permissions:
-      contents: write
+  build:
+    runs-on: windows-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: ilammy/msvc-dev-cmd@v1
+      # 1. 安装 CUDA Toolkit
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.21
         with:
-          vsversion: 2022
+          cuda: '11.0.0' # 指定你需要的 CUDA 版本
+          method: 'network' # 建议使用网络安装，速度相对较快
 
-      - name: "Install CUDA"
-        shell: powershell
+      # 2. 验证 nvcc 是否可用
+      - name: Verify NVCC
+        run: nvcc --version
+
+      # 3. 编译 .cu 文件
+      # 注意：在 Windows 上，nvcc 需要调用 MSVC 的 cl.exe
+      # GitHub Actions 的环境默认已配置好路径
+      - name: Compile CUDA code
         run: |
-          choco install cuda --version=12.0.1.52833 -y
-          "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.0\bin" >> $env:GITHUB_PATH
-
-      - name: "Build"
-        shell: powershell
-        run: |
-          nvcc src/main.cu -o x86_64_windows.exe -O3 -Xptxas -v -lbcrypt -gencode arch=compute_52,code=compute_52
-
-      - uses: ncipollo/release-action@v1
+          nvcc -o my_cuda_app.exe main.cu
+          
+      # 4. (可选) 将生成的 exe 作为 Artifact 保存，方便下载
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
-          artifacts: x86_64_windows.exe
-          token: ${{ secrets.GITHUB_TOKEN }}
-          allowUpdates: true
-          draft: true
-          replacesArtifacts: false
-
-
-  x86_64_linux:
-    name: "x86_64 Linux"
-    runs-on: [ubuntu-22.04]
-    container: nvidia/cuda:11.7.1-devel-ubuntu22.04
-    permissions:
-      contents: write
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: "Build"
-      run: |
-        nvcc src/main.cu -o x86_64_linux.bin -O3 -Xptxas -v -Xcompiler -static-libgcc -Xcompiler -static-libstdc++ -gencode arch=compute_52,code=compute_52
-
-    - uses: ncipollo/release-action@v1
-      with:
-        artifacts: x86_64_linux.bin
-        token: ${{ secrets.GITHUB_TOKEN }}
-        allowUpdates: true
-        draft: true
-        replacesArtifacts: false
+          name: cuda-executable
+          path: cuda_app.exe
